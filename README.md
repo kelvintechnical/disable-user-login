@@ -1,33 +1,35 @@
-# Disable User Login Without Removing the Account (RHEL 9)
+# Command-Line Email Testing (RHEL 9)
 ### RHCSA EX200 Lab | Part of [linux-ops-mastery](https://github.com/kelvintechnical/linux-ops-mastery)
-> Prevent tom from logging in interactively while keeping the account and all associated files intact.
+> Use mutt and mail to test local SMTP configurations and verify messages are routed to the correct local /var/mail user spools.
 
 ![RHCSA](https://img.shields.io/badge/RHCSA-EX200-EE0000?style=flat&logo=redhat&logoColor=white)
-![Topic](https://img.shields.io/badge/Topic-User_Management-blue)
+![Topic](https://img.shields.io/badge/Topic-Remote_Administration-blue)
 
 ---
 
 ## 📋 Scenario
 
-On **Node1**, prevent the user `tom` from logging in to the system without deleting the account. The user account and all associated files must remain intact — only interactive login access should be disabled.
+On **Node1**, use command-line email clients `mutt` and `mail` to test local SMTP configurations. Send messages between local users and verify they are delivered to the correct `/var/mail` spool files.
 
 ---
 
 ## 🎯 Requirements
 
-1. Disable interactive login for `tom`.
-2. Keep the user account intact — no deletion.
-3. Keep all files owned by `tom` intact.
-4. Verify login is blocked.
+1. Install `mutt` and `s-nail` (provides the `mail` command on RHEL 9).
+2. Install and start the local MTA (`postfix`).
+3. Send a test email to a local user using `mail`.
+4. Verify the message landed in the correct `/var/mail` spool.
+5. Read the message using `mutt`.
 
 ---
 
 ## ✅ Tasks
 
-- Use `usermod -s /sbin/nologin` to disable the login shell
-- Verify with `getent passwd tom`
-- Confirm account and files still exist
-- Test login is blocked with `su - tom`
+- Install `mutt` and `s-nail` via `dnf`
+- Install, enable, and start `postfix`
+- Send mail to a local user with `mail`
+- Verify delivery in `/var/mail/`
+- Read mail interactively with `mutt`
 
 ---
 
@@ -35,157 +37,181 @@ On **Node1**, prevent the user `tom` from logging in to the system without delet
 
 | Lab Phrase | Question Being Asked | Tool |
 |------------|---------------------|------|
-| "Prevent login" | How do I block a user from logging in? | `usermod -s /sbin/nologin` |
-| "Without deleting" | How do I keep account intact? | Don't use `userdel` — change the shell only |
-| "Account must remain" | How do I verify account still exists? | `getent passwd tom` |
-| "Files must remain" | How do I confirm files are untouched? | `sudo ls -la /home/tom` |
+| "Test SMTP" | What MTA handles local mail on RHEL? | `postfix` |
+| "Send from command line" | How do I send email without a GUI? | `mail -s "subject" user` |
+| "Verify mail spool" | Where does local mail land? | `/var/mail/username` |
+| "Read mail interactively" | What CLI mail reader has a full UI? | `mutt` |
+| "Is postfix running?" | How do I check a service? | `systemctl status postfix` |
 
 ---
 
-## 🧠 Big Concept — Login Shell
+## 🧠 Big Concept — Local Mail on Linux
 
-Every user account has a **login shell** defined in `/etc/passwd`. This is the program that runs when a user logs in interactively:
+Linux systems have a built-in mail system for **local delivery** — messages between users on the same machine. This is separate from internet email. It's used by:
 
+- **Cron jobs** — failures and output get mailed to root
+- **System services** — alerts and reports go to local admin accounts
+- **SMTP testing** — verifying your MTA config before pointing it at the internet
+
+**The flow:**
 ```
-tom:x:1001:1002::/home/tom:/bin/bash     ← normal login shell
-tom:x:1001:1002::/home/tom:/sbin/nologin ← login blocked
+mail command → postfix (MTA) → /var/mail/username (spool file)
 ```
 
-`/sbin/nologin` is a special binary that immediately prints a message and exits when called — it never gives the user a shell. The account stays in `/etc/passwd` with all its files, groups, and permissions intact.
-
-**Three ways to disable login — know all three for the exam:**
-
-| Method | Command | Effect |
-|--------|---------|--------|
-| Change shell | `usermod -s /sbin/nologin tom` | Shell replaced — cleanest method |
-| Lock password | `usermod -L tom` | Locks password only — SSH keys still work |
-| Set expiry | `usermod -e 1 tom` | Sets account expiry date to the past |
-
-> For RHCSA, `usermod -s /sbin/nologin` is the standard expected answer.
+`/var/mail/username` is a plain text file. Every message is appended to it. `mutt` and `mail` read from this file.
 
 ---
 
-## Step 1 — Check tom's current shell
+## Step 1 — Install mutt and s-nail
 
 ```bash
-getent passwd tom
+sudo dnf install mutt s-nail -y
 ```
 
-This reads `/etc/passwd` for tom's entry. You're looking at 7 colon-separated fields:
-
-```
-tom : x : 1001 : 1002 : : /home/tom : /bin/bash
- ↑     ↑    ↑     ↑    ↑      ↑           ↑
-name  pw   uid   gid  comment home       shell
-```
-
-**Reading the output field by field:**
-
-| Field | Value | Meaning |
-|-------|-------|---------|
-| `tom` | tom | Username |
-| `x` | x | Password stored in `/etc/shadow` |
-| `1001` | 1001 | User ID |
-| `1002` | 1002 | Primary group ID |
-| *(empty)* | | Comment/GECOS field — blank |
-| `/home/tom` | /home/tom | Home directory |
-| `/bin/bash` | /bin/bash | Login shell — this is what we're changing |
+> **Important RHEL 9 note:** The package `mailx` no longer exists on RHEL 9 — it was renamed to `s-nail`. Installing `mailx` returns `No match for argument`. Always use `s-nail` on RHEL 9 — it provides the `mail` command.
 
 **Expected output:**
 ```
-tom:x:1001:1002::/home/tom:/bin/bash
+Installed:
+  mutt-5:2.2.6-2.el9.x86_64
+  s-nail-14.9.22-9.el9_7.x86_64
+  tokyocabinet-1.4.48-19.el9.x86_64
+  urlview-0.9-31.20131022git08767a.el9.x86_64
+Complete!
+```
+
+> `tokyocabinet` and `urlview` are dependencies pulled in automatically — expected.
+
+---
+
+## Step 2 — Install, enable, and start postfix
+
+> **Important RHEL 9 AMI note:** `postfix` is NOT pre-installed on RHEL 9 AMIs — you must install it first. The `mail` command appears to send without it but nothing gets delivered.
+
+```bash
+sudo dnf install postfix -y
+sudo systemctl enable --now postfix
+```
+
+**Verify:**
+```bash
+systemctl status postfix | grep Active
+# Expected: Active: active (running)
+```
+
+**What `enable --now` does:**
+- `enable` — creates a symlink so postfix starts automatically at every boot
+- `--now` — also starts it immediately without needing a separate `systemctl start`
+
+**Expected output from enable:**
+```
+Created symlink /etc/systemd/system/multi-user.target.wants/postfix.service → /usr/lib/systemd/system/postfix.service.
 ```
 
 ---
 
-## Step 2 — Disable the login shell
+## Step 3 — Send a test email to a local user
 
 ```bash
-sudo usermod -s /sbin/nologin tom
+echo "this is a test message body" | mail -s "Test Subject" tom
 ```
 
-> `usermod` modifies an existing user account. `-s` sets the login shell. `/sbin/nologin` blocks interactive login immediately.
+**Breaking it down:**
 
-**Verify the change:**
-```bash
-getent passwd tom
-```
-
-**Expected output:**
-```
-tom:x:1001:1002::/home/tom:/sbin/nologin
-```
-
-Notice exactly what changed — only the last field:
-
-```
-Before: tom:x:1001:1002::/home/tom:/bin/bash
-After:  tom:x:1001:1002::/home/tom:/sbin/nologin
-```
-
-Everything else — UID, GID, home directory — is completely untouched. The account is intact, only the door is locked.
-
----
-
-## Step 3 — Confirm account and files are intact
-
-```bash
-# Confirm account still exists
-id tom
-
-# Confirm home directory and files are untouched
-sudo ls -la /home/tom
-```
-
-> **Why `sudo`?** Tom's home directory has `drwx------` permissions — only tom and root can read it. Running `ls` without sudo returns `Permission denied` even though the directory exists. That's correct Linux behavior, not an error.
-
-**Expected output:**
-```
-total 12
-drwx------. 2 tom  tom   62 May 20 11:16 .
-drwxr-xr-x. 4 root root  33 May 20 11:16 ..
--rw-r--r--. 1 tom  tom   18 Feb 15  2024 .bash_logout
--rw-r--r--. 1 tom  tom  141 Feb 15  2024 .bash_profile
--rw-r--r--. 1 tom  tom  492 Feb 15  2024 .bashrc
-```
-
-**Reading the home directory files:**
-
-| File | Meaning |
+| Part | Meaning |
 |------|---------|
-| `drwx------` | Directory owned by tom — no access for other users |
-| `.bash_logout` | Runs when tom logs out |
-| `.bash_profile` | Runs at login — sets environment variables |
-| `.bashrc` | Runs for interactive shells — aliases and functions |
+| `echo "..."` | Produces the message body |
+| `\|` | Pipes the body into the `mail` command |
+| `mail -s "Test Subject"` | `-s` sets the subject line |
+| `tom` | The local username to deliver to |
 
-> These files came from `/etc/skel` when tom was created and are completely untouched.
+> No output after running this command is normal — it means the message was accepted by postfix for delivery.
+
+**Send to root:**
+```bash
+echo "Root alert test" | mail -s "Root Test" root
+```
 
 ---
 
-## Step 4 — Set a password and verify login is blocked
-
-> Tom needs a password set before `su -` can test the nologin block — otherwise it fails at authentication before reaching the shell check.
+## Step 4 — Verify delivery in the mail spool
 
 ```bash
-sudo passwd tom
+sudo cat /var/mail/tom
 ```
 
-**Then test the login block:**
+> **Why `sudo`?** `/var/mail/` is restricted — use `sudo` to read another user's spool file.
+
+**Expected output (mbox format):**
+```
+From ec2-user@ip-172-31-10-183.ec2.internal  Wed May 20 14:13:13 2026
+Return-Path: <ec2-user@ip-172-31-10-183.ec2.internal>
+X-Original-To: tom
+Delivered-To: tom@ip-172-31-10-183.ec2.internal
+Received: by ip-172-31-10-183.ec2.internal (Postfix, from userid 1000)
+        id DD3CF18A8E9F; Wed, 20 May 2026 14:13:13 -0400 (EDT)
+Subject: Test Subject
+User-Agent: s-nail v14.9.22
+From: Cloud User <ec2-user@ip-172-31-10-183.ec2.internal>
+
+this is a test message body
+```
+
+**Reading the mbox output:**
+
+| Field | Meaning |
+|-------|---------|
+| `From ec2-user@...` | Sent by your ec2-user account |
+| `Delivered-To: tom@...` | Postfix delivered to tom locally |
+| `Subject: Test Subject` | Your `-s` flag value |
+| `User-Agent: s-nail` | Confirms s-nail sent it |
+| `this is a test message body` | Your message body at the bottom |
+
+**Check if the file exists and has content:**
 ```bash
-su - tom
+sudo ls -lh /var/mail/tom
+# Non-zero file size = mail was delivered
 ```
 
-**Expected output:**
-```
-This account is currently not available.
+> `/var/mail/tom` is created on first delivery — it won't exist until the first message arrives.
+
+---
+
+## Step 5 — Read mail interactively with mutt
+
+```bash
+sudo mutt -f /var/mail/tom
 ```
 
-Notice what happened in sequence:
-- Password was accepted — authentication succeeded ✓
-- Login was blocked — `/sbin/nologin` fired immediately after auth ✓
-- Account and files intact — nothing was deleted ✓
+> `-f` opens a specific mailbox file directly. `sudo` is required because `/var/mail/tom` is root-owned.
 
-> **Why not `su -s /bin/bash tom`?** That command overrides the shell — it bypasses `/sbin/nologin` entirely and is not a valid login test. Always use `su - tom` to test the actual login behavior.
+**mutt keyboard shortcuts:**
+
+| Key | Action |
+|-----|--------|
+| `Enter` | Open and view the selected message |
+| `q` | Go back to the message list |
+| `d` | Mark message for deletion |
+| `r` | Reply to message |
+| `Q` | Quit mutt entirely |
+
+> **Note:** If mutt opens a file in `vi` instead of displaying the message list, you accidentally triggered the editor. Press `Escape` then `:q!` to exit vi without saving, then navigate with the keys above to view messages — not edit them.
+
+---
+
+## Step 6 — Send multi-line mail from a file
+
+```bash
+cat > /tmp/mailbody.txt << EOF
+Line 1: System check complete.
+Line 2: All services nominal.
+Line 3: No action required.
+EOF
+
+mail -s "System Report" root < /tmp/mailbody.txt
+```
+
+> Redirecting a file into `mail` is how cron jobs and scripts send formatted reports — this is a common real-world pattern.
 
 ---
 
@@ -193,43 +219,44 @@ Notice what happened in sequence:
 
 | Concept | What it means |
 |---------|--------------|
-| Login shell | The program in `/etc/passwd` that runs at interactive login |
-| `/sbin/nologin` | A binary that blocks login and prints a message — account stays intact |
-| `/etc/passwd` format | `username:x:uid:gid:comment:home:shell` — shell is the last field |
-| `usermod -s` | Changes the login shell for an existing user |
-| `usermod -L` | Locks the password only — SSH key-based login still works |
-| `getent passwd` | Reads `/etc/passwd` — confirms current shell setting |
-| `drwx------` | Home directory permission — only owner and root can access |
-| `/etc/skel` | Template directory — files copied to every new user's home on creation |
+| `postfix` | The default MTA (Mail Transfer Agent) on RHEL 9 — must be installed and running |
+| MTA | Mail Transfer Agent — routes and delivers email messages |
+| `s-nail` | RHEL 9 replacement for `mailx` — provides the `mail` command |
+| `/var/mail/username` | Local mail spool — plain text file, one per user, created on first delivery |
+| mbox format | Standard format for mail spools — messages appended sequentially |
+| `mail -s` | Sets subject line; body comes from stdin or file redirect |
+| `mutt -f /path` | Opens a specific mailbox file directly |
+| Cron + mail | Failed cron jobs email output to root's local spool automatically |
 
 ---
 
 ## ⚠️ Pitfalls
 
-- **Using `userdel`** → deletes the account entirely — never use this when the requirement says "keep intact"
-- **Using `usermod -L`** → only locks the password; SSH key-based login still works — not a full block
-- **Testing with `su -s /bin/bash tom`** → overrides the shell; not a valid login test — always use `su - tom`
-- **Confusing `/sbin/nologin` with `/bin/false`** → both block login but `/sbin/nologin` prints a message; either is acceptable on the exam
-- **No password set** → `su - tom` fails at authentication before reaching the nologin check — set a password first with `sudo passwd tom`
-- **`ls /home/tom` without sudo** → returns `Permission denied` — use `sudo ls -la /home/tom` to verify files as root
+- **`mailx` not found on RHEL 9** → package was renamed to `s-nail`; always use `s-nail` on RHEL 9
+- **`postfix` not installed** → not pre-installed on RHEL 9 AMIs; run `dnf install postfix -y` first
+- **Postfix not running** → `mail` appears to send but nothing is delivered; always check `systemctl status postfix`
+- **`/var/mail/tom` doesn't exist** → file is created on first delivery; missing means mail wasn't delivered
+- **Reading without sudo** → `/var/mail/` is restricted; use `sudo cat` or `sudo mutt -f`
+- **mutt opens vi** → you triggered the editor accidentally; press `Escape` then `:q!` to exit, then use `Enter` to view messages
+- **EC2 outbound SMTP blocked** → port 25 is blocked by AWS; this lab only works for local delivery between users on the same instance
 
 ---
 
 ## ✅ Lab Checklist
 
-- `getent passwd tom` shows `/bin/bash` as starting shell ✓
-- `usermod -s /sbin/nologin tom` applied ✓
-- `getent passwd tom` shows `/sbin/nologin` as updated shell ✓
-- `id tom` confirms account still exists ✓
-- `sudo ls -la /home/tom` confirms files intact ✓
-- `sudo passwd tom` sets a password for testing ✓
-- `su - tom` returns `This account is currently not available.` ✓
+- `mutt` and `s-nail` installed via `dnf` ✓
+- `postfix` installed, enabled, and running ✓
+- `mail -s "Test Subject" tom` sends message ✓
+- `sudo cat /var/mail/tom` confirms delivery in mbox format ✓
+- `sudo mutt -f /var/mail/tom` opens the mailbox interactively ✓
+- Multi-line mail sent from file with `<` redirect ✓
 
 ---
 
 ## 🔗 Related Labs
 
-- [User & Group Management / Permissions](https://github.com/kelvintechnical/User-Group-Management-Permissions)
+- [Command-Line Web and FTP Testing](https://github.com/kelvintechnical/elinks-iftp)
+- [Network Troubleshooting with telnet and nmap](https://github.com/kelvintechnical/telnet-nmap)
 - [Full RHCSA/RHCE Study Guide →](https://github.com/kelvintechnical/linux-ops-mastery)
 
 ---
